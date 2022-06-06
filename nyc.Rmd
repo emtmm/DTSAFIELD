@@ -1,0 +1,276 @@
+---
+title: "NYPD shooting"
+author: "Ernesto Medina"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+# Import libraries
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library("stringr") 
+library("readr")
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(lubridate)
+library(gridExtra)
+```
+
+
+## NYPD shooting incident data
+
+-   What neighborhood has more incidents?
+
+-   Who is more affected?
+
+-   Are shootings slowing down?
+
+
+
+
+###Data source:
+
+<https://catalog.data.gov/dataset/nypd-shooting-incident-data-historic>.
+
+Get url for data:
+
+```{r urls, message=TRUE}
+url_in <- "https://data.cityofnewyork.us/api/views/833y-fsy8/"
+file_name <- c("rows.csv?accessType=DOWNLOAD")
+urls <- str_c(url_in, file_name)
+urls
+```
+
+### Import data and print
+
+```{r import_data, message=FALSE}
+incidents <- read_csv(urls[1])
+incidents
+```
+
+# Data Description
+
+In this document we are presenting data from NYPD data source. We will go through a process of visual analysis and modeling. As we can see in the summary:
+
+-   Data collected daily 2006-2020.
+
+-   The data consists of 23585 rows in the dataset.
+
+-   Column names are: `r colnames(incidents)`
+
+-   STATISTICAL_MURDER_FLAG and INCIDENT_KEY will be used to differentciate between murders/non murder incidents (TRUE/FALSE flag) and individual/multiple victims (incident key).
+
+```{r inspect, message=TRUE, echo=TRUE}
+summary(incidents)
+
+```
+
+
+## Transform Data
+
+-   Transform data to see relation between incidents and deaths
+
+
+
+```{r by_date_and_combine, message=FALSE, echo=FALSE}
+incidents <- incidents %>%
+  select(-c(`INCIDENT_KEY`,`Latitude`,`Longitude`,`Lon_Lat`, `X_COORD_CD`, `Y_COORD_CD`,`JURISDICTION_CODE`,`LOCATION_DESC`))
+
+incidents <- incidents %>%
+  mutate(OCCUR_DATE = mdy(OCCUR_DATE)) %>%
+  unite("BORO_PRECINCT",
+        c(BORO,PRECINCT),
+        sep = ", ",
+        na.rm = TRUE,
+        remove = FALSE) %>%
+  unite("VIC_AGE_SEX",
+        c(VIC_AGE_GROUP,VIC_SEX),
+        sep = ", ",
+        na.rm = TRUE,
+        remove = FALSE)
+summary(incidents)
+```
+
+-   Columns we keep in dataset: `r colnames(incidents)`
+
+## Analyzing data
+
+```{r filter_data_and_group, message=FALSE, echo=FALSE}
+deaths_by_boro <- incidents %>% 
+  filter(STATISTICAL_MURDER_FLAG == TRUE) %>%
+  group_by(BORO,STATISTICAL_MURDER_FLAG, OCCUR_DATE) %>%
+  tally(name="murder_cases") %>%
+  ungroup() 
+
+assaults_by_boro <- incidents %>%
+  filter(STATISTICAL_MURDER_FLAG == FALSE) %>%
+  group_by(BORO,STATISTICAL_MURDER_FLAG, OCCUR_DATE) %>%
+  tally(name="assault_cases") %>%
+  ungroup() 
+
+cases_by_boro <- incidents %>%
+  group_by(BORO, OCCUR_DATE) %>%
+  summarize(Total_cases= n(), murder_cases=sum(STATISTICAL_MURDER_FLAG, na.rm=TRUE)) %>%
+  ungroup()
+
+total_cases_by_boro <- incidents %>%
+  group_by(BORO) %>%
+  summarize(Total_cases= n(), murder_cases=sum(STATISTICAL_MURDER_FLAG, na.rm=TRUE)) %>%
+  ungroup()
+
+rates_by_boro <- cases_by_boro %>%
+  arrange(OCCUR_DATE) %>%
+  mutate(Murder_rate = murder_cases / Total_cases) %>%
+  group_by(BORO) %>%
+  summarize(cases= n(), murder_cases = sum(murder_cases), murder_rate=sum(murder_cases)/sum(Total_cases)) %>%
+  ungroup()
+
+rates_by_boro_date <- cases_by_boro %>%
+  arrange(OCCUR_DATE) %>%
+  mutate(Murder_rate = murder_cases / Total_cases)
+
+cases_sex_group <- incidents %>%
+  group_by(VIC_SEX) %>%
+  summarize(Total_cases= n(), murder_cases=sum(STATISTICAL_MURDER_FLAG, na.rm=TRUE)) %>%
+  ungroup()
+
+cases_sex_group_by_date <- incidents %>%
+  group_by(VIC_SEX, OCCUR_DATE) %>%
+  summarize(Total_cases= n(), murder_cases=sum(STATISTICAL_MURDER_FLAG, na.rm=TRUE)) %>%
+  ungroup()
+
+
+```
+
+### Boros deaths,cases and murder rate: `r knitr::kable(rates_by_boro)`
+
+
+##
+
+
+```{r boros, fig.height = 4, fig.width = 5, message=FALSE, echo=FALSE}
+a <- total_cases_by_boro %>%
+     ggplot() +
+     scale_y_log10() +
+     geom_col(aes(x = BORO, y = Total_cases, fill=BORO)) +coord_flip()
+
+b <- total_cases_by_boro %>%
+     ggplot() +
+     geom_col(aes(x = BORO, y = murder_cases, fill=BORO)) +coord_flip()
+
+grid.arrange(a,b)
+
+```
+
+## Visualizing and analyzing results
+
+
+### Cases Murders comparison
+
+-    Are murder and incidents related?
+
+
+```{r cases_murder_comparison, message=FALSE, echo=FALSE}
+cases_by_boro %>%
+  ggplot(aes(x = OCCUR_DATE, y= Total_cases)) +
+  xlab("Date") +
+  geom_line(aes(color="Total_cases"))+
+  geom_point(aes(color="Total_cases")) +
+  geom_line(aes(y=murder_cases,color="murder_cases"))+
+  geom_point(aes(y=murder_cases,color="murder_cases")) +
+  scale_y_log10() +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle=90)) +
+  labs(title = "Murder/cases by date for specific Boro in NYC", y=NULL)
+```
+
+
+##
+
+## Data Modeling
+
+-   To see if there is a relation between cases and deaths we'll use a linear model:
+
+```{r linear_model, message=FALSE, echo=FALSE}
+modl <- lm(murder_cases~Total_cases, data = cases_by_boro)
+summary(modl)
+```
+
+
+##
+
+
+
+### Model plot
+
+```{r plot_model, message=FALSE, echo=FALSE}
+cases_by_boro_pred <- cases_by_boro %>% mutate(pred = predict(modl))
+cases_by_boro_pred %>%
+  ggplot() +
+  geom_point(aes(x = Total_cases, y = murder_cases), color = "blue") +
+  geom_point(aes(x = Total_cases, y = pred), color = "red")
+```
+
+
+
+##
+
+
+### Cases  comparison
+
+
+```{r cases_by_boro, message=FALSE, echo=FALSE}
+cases_by_boro %>%
+  ggplot(aes(x = OCCUR_DATE, y= Total_cases, color=BORO)) +
+  xlab("Date") +
+  geom_line()+
+  scale_y_log10() +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle=90)) +
+  labs(title = "Incident by date for all Boros in NYC", y=NULL)
+```
+
+
+### Murders comparison
+
+
+```{r murders_by_boro, message=FALSE, echo=FALSE}
+cases_by_boro %>%
+  ggplot(aes(x = OCCUR_DATE, y= murder_cases, color=BORO)) +
+  xlab("Date") +
+  geom_line()+
+  scale_y_log10() +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle=90)) +
+  labs(title = "Murder cases by date for all Boros in NYC", y=NULL)
+```
+
+
+
+### Murders Rate by victim's sex
+
+```{r murder_rate, message=FALSE, echo=FALSE}
+cases_sex_group_by_date %>%
+  ggplot(aes(x = OCCUR_DATE, y= Total_cases, color=VIC_SEX)) +
+  xlab("Date") +
+  geom_line()+
+  scale_y_log10() +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle=90)) +
+  labs(title = "Murder rate by sex in NYC", y=NULL)
+```
+
+
+
+
+
+# Conclusion
+
+Brooklyn is the Neighborhood with more incidents and murders in NYC with a murder rate of 0.195. The boro with highest murder rate is Staten Island with 0.205 although it can be moticated by a lower population. Male victims are the most affected in shootings in NYC by a factor of 10. Finally the incidents number has had an increase in the last year after some declines, probably directly related to covid-19.
+
+As potential bias my inclination against violence and guns probably affects the analysis I've given in this report.
+I will favor showing bad outputs that shows how bad is gun violence.
